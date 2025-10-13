@@ -1,37 +1,88 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Program CLI: Sistem Informasi Peminjaman Kelas (SIPK) – Login/Register + CRUD
+Program CLI: Sistem Informasi Peminjaman Kelas (SIPK) – FUNCTIONAL PROGRAMMING VERSION
 Tema: Peminjaman Kelas per akun (setiap user hanya bisa mengelola datanya sendiri)
 
-Ketentuan yang dipenuhi:
-1) Data akun dalam dictionary -> accounts = {id: password}
-2) Data profil nested dictionary -> profiles = {id: {"nama":..., "alamat":..., "hp":...}}
-3) Daftar menu aplikasi dalam bentuk tuple -> MAIN_MENU (diakses memakai slicing)
-4) Register: buat akun (ID & password)
-5) Login: hanya akun terdaftar
-6) CRUD data (peminjaman kelas) hanya setelah login
-7) Validasi input dengan while/try-except
-8) Data Tambahan per akun: "peminjaman" bertipe LIST of DICT
-   - Alasan memilih LIST: data peminjaman perlu urutan waktu/entri,
-     mudah diakses via indeks untuk Update/Delete, dan fleksibel.
+=== TRANSFORMASI PARADIGMA FUNGSIONAL ===
 
-Catatan:
-- Tiap operasi CRUD hanya mengelola peminjaman milik akun login (key: user_id).
-- ROOMS disimpan sebagai TUPLE (immutable, daftar referensi kelas).
-- Format tanggal: YYYY-MM-DD ; jam: HH:MM (24 jam).
+BEFORE (Imperative/Object-Oriented Violations):
+- Global variables yang mutable: accounts, profiles, peminjaman
+- Fungsi dengan side effects yang memodifikasi global state
+- Business logic tercampur dengan I/O operations
+- Direct mutations: .append(), .pop(), dict assignments
+- Imperative loops dengan state changes
+
+AFTER (Functional Programming Paradigm):
+1. IMMUTABLE STATE MANAGEMENT:
+   - AppState(NamedTuple): Immutable container untuk seluruh aplikasi state
+   - Tidak ada global mutable variables
+   - State transformations melalui pure functions yang return new state
+
+2. PURE FUNCTIONS (No Side Effects):
+   - Validation functions: is_valid_tanggal(), is_valid_jam(), etc.
+   - Business logic: create_new_account(), authenticate_user(), add_peminjaman()
+   - Data transformation: update_user_profile(), remove_peminjaman_at_index()
+   - Formatting: format_profile_display(), format_peminjaman_display()
+
+3. SEPARATION OF CONCERNS:
+   - Pure functions untuk business logic (tidak ada I/O)
+   - Terpisah I/O functions untuk user interaction
+   - Clear distinction antara computation dan side effects
+
+4. FUNCTIONAL COMPOSITION:
+   - Higher-order functions untuk menu handling
+   - State passing melalui function parameters dan return values
+   - Declarative style dengan function composition
+
+5. IMMUTABLE DATA OPERATIONS:
+   - List operations: current_list + [new_item] (tidak pakai .append())
+   - Dict operations: {**old_dict, key: new_value} (tidak pakai direct assignment)
+   - State updates: return new AppState instance
+
+MANFAAT TRANSFORMASI:
+- Predictable behavior: Pure functions selalu return hasil yang sama untuk input sama
+- No hidden side effects: Semua dependencies explicit dalam parameter
+- Easy testing: Pure functions mudah di-unit test
+- Concurrent safety: Immutable state thread-safe
+- Better reasoning: Function behavior dapat diprediksi tanpa global context
+
+CONTOH TRANSFORMASI:
+BEFORE: register() -> Modifies global accounts, profiles, peminjaman
+AFTER: create_new_account(state, ...) -> Returns new AppState
+
+BEFORE: ajukan_peminjaman(user_id) -> peminjaman[user_id].append(entry)
+AFTER: add_peminjaman(state, user_id, entry) -> Returns new AppState
+
+Ketentuan Program (masih dipenuhi):
+1) Data akun dalam AppState.accounts: Dict[str, str]
+2) Data profil dalam AppState.profiles: Dict[str, Dict[str, str]]
+3) Menu dalam TUPLE dengan slicing
+4) Register/Login dengan pure functions
+5) CRUD operations dengan immutable state management
+6) Validasi dengan pure validation functions
+7) LIST of DICT untuk peminjaman (sekarang immutable operations)
 """
 
-from typing import Dict, List
+from typing import Dict, List, Tuple, NamedTuple, Optional
 from datetime import datetime
+from functools import reduce
+from copy import deepcopy
 
-# ---------------------------- Penyimpanan Data ---------------------------- #
-accounts: Dict[str, str] = {}  # {user_id: password}
-profiles: Dict[str, Dict[str, str]] = {}  # {user_id: {"nama":..., "alamat":..., "hp":...}}
+# ---------------------------- Immutable Data Structures (Functional Design) ---------------------------- #
 
-# Data tambahan per akun: daftar peminjaman kelas (sequence: LIST of DICT)
-# Struktur peminjaman: {"kelas": str, "tanggal": "YYYY-MM-DD", "mulai": "HH:MM", "selesai": "HH:MM", "keperluan": str, "status": "pengajuan"|"disetujui"|"ditolak"}
-peminjaman: Dict[str, List[Dict[str, str]]] = {}  # {user_id: [pinjam1, pinjam2, ...]}
+class AppState(NamedTuple):
+    """Immutable application state - represents entire system state"""
+    accounts: Dict[str, str]  # {user_id: password}
+    profiles: Dict[str, Dict[str, str]]  # {user_id: {"nama":..., "alamat":..., "hp":...}}
+    peminjaman: Dict[str, List[Dict[str, str]]]  # {user_id: [pinjam1, pinjam2, ...]}
+
+# Initial empty state
+INITIAL_STATE = AppState(
+    accounts={},
+    profiles={},
+    peminjaman={}
+)
 
 # Daftar kelas sebagai TUPLE (referensi statis)
 ROOMS = (
@@ -68,39 +119,26 @@ CRUD_MENU = (
 STATUS_OPSI = ("pengajuan", "disetujui", "ditolak")
 
 
-# ---------------------------- Utilitas Validasi Input ---------------------------- #
-def input_non_kosong(prompt: str) -> str:
-    while True:
-        s = input(prompt).strip()
-        if s:
-            return s
-        print("Input tidak boleh kosong. Coba lagi.")
+# ---------------------------- Pure Validation Functions (Functional Design) ---------------------------- #
 
-def input_pilihan(prompt: str, opsi: List[str]) -> int:
-    while True:
-        try:
-            val = int(input(prompt).strip())
-            if 1 <= val <= len(opsi):
-                return val
-            print(f"Masukkan angka 1..{len(opsi)} sesuai menu.")
-        except ValueError:
-            print("Masukan harus berupa angka. Coba lagi.")
-
-def valid_tanggal(s: str) -> bool:
+def is_valid_tanggal(date_str: str) -> bool:
+    """Pure function: validates date format without side effects"""
     try:
-        datetime.strptime(s, "%Y-%m-%d")
+        datetime.strptime(date_str, "%Y-%m-%d")
         return True
     except ValueError:
         return False
 
-def valid_jam(s: str) -> bool:
+def is_valid_jam(time_str: str) -> bool:
+    """Pure function: validates time format without side effects"""
     try:
-        datetime.strptime(s, "%H:%M")
+        datetime.strptime(time_str, "%H:%M")
         return True
     except ValueError:
         return False
 
-def jam_berurutan(mulai: str, selesai: str) -> bool:
+def is_jam_berurutan(mulai: str, selesai: str) -> bool:
+    """Pure function: checks if end time is after start time"""
     try:
         t1 = datetime.strptime(mulai, "%H:%M")
         t2 = datetime.strptime(selesai, "%H:%M")
@@ -108,289 +146,545 @@ def jam_berurutan(mulai: str, selesai: str) -> bool:
     except ValueError:
         return False
 
+def is_valid_password(password: str) -> bool:
+    """Pure function: validates password criteria"""
+    return len(password.strip()) >= 4
 
-# ---------------------------- Fitur Register & Login ---------------------------- #
-def register():
-    print("\n=== Registrasi Akun Baru ===")
+def is_valid_choice(choice_str: str, max_options: int) -> bool:
+    """Pure function: validates menu choice"""
+    try:
+        val = int(choice_str.strip())
+        return 1 <= val <= max_options
+    except ValueError:
+        return False
+
+def is_non_empty(text: str) -> bool:
+    """Pure function: checks if string is non-empty after stripping"""
+    return bool(text.strip())
+
+# ---------------------------- I/O Functions (Separated from Business Logic) ---------------------------- #
+
+def get_non_empty_input(prompt: str) -> str:
+    """I/O function: gets non-empty input with validation loop"""
     while True:
-        user_id = input_non_kosong("Buat ID (username/NIM): ")
-        if user_id in accounts:
-            print("ID sudah terdaftar. Gunakan ID lain.")
-            continue
-        break
+        user_input = input(prompt).strip()
+        if is_non_empty(user_input):
+            return user_input
+        print("Input tidak boleh kosong. Coba lagi.")
+
+def get_choice_input(prompt: str, max_options: int) -> int:
+    """I/O function: gets valid menu choice with validation loop"""
     while True:
-        pwd = input_non_kosong("Buat Password (min 4 karakter): ")
-        if len(pwd) < 4:
-            print("Password terlalu pendek (min 4).")
-            continue
-        break
+        user_input = input(prompt).strip()
+        if is_valid_choice(user_input, max_options):
+            return int(user_input)
+        print(f"Masukkan angka 1..{max_options} sesuai menu.")
 
-    accounts[user_id] = pwd
-    # Buat profil awal
-    nama = input_non_kosong("Nama: ")
-    alamat = input_non_kosong("Alamat: ")
-    hp = input_non_kosong("No. HP: ")
-    profiles[user_id] = {"nama": nama, "alamat": alamat, "hp": hp}
-
-    # Inisialisasi daftar peminjaman user
-    peminjaman[user_id] = []
-
-    print(f"Akun '{user_id}' berhasil dibuat!\n")
-
-
-def login() -> str:
-    print("\n=== Login ===")
-    user_id = input_non_kosong("ID: ")
-    pwd = input_non_kosong("Password: ")
-    if user_id in accounts and accounts[user_id] == pwd:
-        print(f"Login berhasil. Selamat datang, {profiles[user_id]['nama']}!\n")
-        return user_id
-    print("ID atau Password salah.\n")
-    return ""
-
-
-# ---------------------------- Fitur Profil ---------------------------- #
-def lihat_profil(user_id: str):
-    print("\n=== Profil Saya ===")
-    p = profiles.get(user_id, {})
-    if not p:
-        print("Profil tidak ditemukan.")
-        return
-    print(f"ID     : {user_id}")
-    print(f"Nama   : {p.get('nama','-')}")
-    print(f"Alamat : {p.get('alamat','-')}")
-    print(f"HP     : {p.get('hp','-')}")
-    print("")
-
-
-def ubah_profil(user_id: str):
-    print("\n=== Ubah Profil ===")
-    p = profiles.get(user_id, {})
-    if not p:
-        print("Profil tidak ditemukan.")
-        return
-    nama = input("Nama (kosongkan jika tidak diubah): ").strip()
-    alamat = input("Alamat (kosongkan jika tidak diubah): ").strip()
-    hp = input("No. HP (kosongkan jika tidak diubah): ").strip()
-
-    if nama:
-        p["nama"] = nama
-    if alamat:
-        p["alamat"] = alamat
-    if hp:
-        p["hp"] = hp
-
-    profiles[user_id] = p
-    print("Profil berhasil diperbarui.\n")
-
-
-# ---------------------------- Fitur CRUD Peminjaman ---------------------------- #
-def tampilkan_peminjaman(user_id: str):
-    print("\n=== Daftar Peminjaman Saya ===")
-    data = peminjaman.get(user_id, [])
-    if not data:
-        print("(Belum ada peminjaman)\n")
-        return
-    for i, d in enumerate(data, start=1):
-        print(f"{i}. [{d.get('status','pengajuan').upper():10}] {d.get('kelas','-')} | {d.get('tanggal','-')} {d.get('mulai','-')}-{d.get('selesai','-')}")
-        print(f"   Keperluan: {d.get('keperluan','-')}")
-    print("")
-
-
-def pilih_kelas() -> str:
-    print("Pilih Kelas:")
-    for i, r in enumerate(ROOMS, start=1):
-        print(f"{i}. {r}")
-    idx = input_pilihan("Masukkan pilihan: ", list(ROOMS))
-    return ROOMS[idx - 1]
-
-
-def input_tanggal() -> str:
+def get_tanggal_input() -> str:
+    """I/O function: gets valid date input"""
     while True:
-        tgl = input_non_kosong("Tanggal (YYYY-MM-DD): ")
-        if valid_tanggal(tgl):
-            return tgl
+        date_input = get_non_empty_input("Tanggal (YYYY-MM-DD): ")
+        if is_valid_tanggal(date_input):
+            return date_input
         print("Format tanggal tidak valid.")
 
-
-def input_jam_range() -> (str, str):
+def get_jam_range_input() -> Tuple[str, str]:
+    """I/O function: gets valid time range input"""
     while True:
-        mulai = input_non_kosong("Jam Mulai (HH:MM): ")
-        selesai = input_non_kosong("Jam Selesai (HH:MM): ")
-        if not valid_jam(mulai) or not valid_jam(selesai):
+        mulai = get_non_empty_input("Jam Mulai (HH:MM): ")
+        selesai = get_non_empty_input("Jam Selesai (HH:MM): ")
+        if not (is_valid_jam(mulai) and is_valid_jam(selesai)):
             print("Format jam tidak valid.")
             continue
-        if not jam_berurutan(mulai, selesai):
+        if not is_jam_berurutan(mulai, selesai):
             print("Jam selesai harus lebih besar dari jam mulai.")
             continue
         return mulai, selesai
 
 
-def ajukan_peminjaman(user_id: str):
+# ---------------------------- Pure Authentication Functions ---------------------------- #
+
+def create_new_account(state: AppState, user_id: str, password: str, 
+                      nama: str, alamat: str, hp: str) -> AppState:
+    """Pure function: creates new account and returns new state"""
+    if user_id in state.accounts:
+        return state  # No change if user already exists
+    
+    new_accounts = {**state.accounts, user_id: password}
+    new_profiles = {**state.profiles, user_id: {"nama": nama, "alamat": alamat, "hp": hp}}
+    new_peminjaman = {**state.peminjaman, user_id: []}
+    
+    return AppState(
+        accounts=new_accounts,
+        profiles=new_profiles,
+        peminjaman=new_peminjaman
+    )
+
+def is_user_exists(state: AppState, user_id: str) -> bool:
+    """Pure function: checks if user exists"""
+    return user_id in state.accounts
+
+def authenticate_user(state: AppState, user_id: str, password: str) -> bool:
+    """Pure function: validates login credentials"""
+    return (user_id in state.accounts and 
+            state.accounts[user_id] == password)
+
+def get_user_profile_name(state: AppState, user_id: str) -> str:
+    """Pure function: gets user's display name"""
+    return state.profiles.get(user_id, {}).get("nama", user_id)
+
+# ---------------------------- I/O Registration & Login Functions ---------------------------- #
+
+def register_user_interactive(state: AppState) -> AppState:
+    """I/O function: handles interactive user registration"""
+    print("\n=== Registrasi Akun Baru ===")
+    
+    # Get unique user ID
+    while True:
+        user_id = get_non_empty_input("Buat ID (username/NIM): ")
+        if not is_user_exists(state, user_id):
+            break
+        print("ID sudah terdaftar. Gunakan ID lain.")
+    
+    # Get valid password
+    while True:
+        password = get_non_empty_input("Buat Password (min 4 karakter): ")
+        if is_valid_password(password):
+            break
+        print("Password terlalu pendek (min 4).")
+    
+    # Get profile information
+    nama = get_non_empty_input("Nama: ")
+    alamat = get_non_empty_input("Alamat: ")
+    hp = get_non_empty_input("No. HP: ")
+    
+    # Create new state with new account
+    new_state = create_new_account(state, user_id, password, nama, alamat, hp)
+    print(f"Akun '{user_id}' berhasil dibuat!\n")
+    return new_state
+
+def login_user_interactive(state: AppState) -> Optional[str]:
+    """I/O function: handles interactive login and returns user_id if successful"""
+    print("\n=== Login ===")
+    user_id = get_non_empty_input("ID: ")
+    password = get_non_empty_input("Password: ")
+    
+    if authenticate_user(state, user_id, password):
+        user_name = get_user_profile_name(state, user_id)
+        print(f"Login berhasil. Selamat datang, {user_name}!\n")
+        return user_id
+    
+    print("ID atau Password salah.\n")
+    return None
+
+
+# ---------------------------- Pure Profile Management Functions ---------------------------- #
+
+def get_user_profile(state: AppState, user_id: str) -> Optional[Dict[str, str]]:
+    """Pure function: retrieves user profile data"""
+    return state.profiles.get(user_id)
+
+def update_user_profile(state: AppState, user_id: str, updates: Dict[str, str]) -> AppState:
+    """Pure function: updates user profile and returns new state"""
+    current_profile = state.profiles.get(user_id, {})
+    if not current_profile:
+        return state  # No change if user not found
+    
+    # Create updated profile by merging non-empty updates
+    updated_profile = {**current_profile}
+    for key, value in updates.items():
+        if value.strip():  # Only update non-empty values
+            updated_profile[key] = value.strip()
+    
+    new_profiles = {**state.profiles, user_id: updated_profile}
+    return AppState(
+        accounts=state.accounts,
+        profiles=new_profiles,
+        peminjaman=state.peminjaman
+    )
+
+def format_profile_display(user_id: str, profile: Dict[str, str]) -> str:
+    """Pure function: formats profile data for display"""
+    return f"""ID     : {user_id}
+Nama   : {profile.get('nama', '-')}
+Alamat : {profile.get('alamat', '-')}
+HP     : {profile.get('hp', '-')}"""
+
+# ---------------------------- I/O Profile Functions ---------------------------- #
+
+def display_user_profile(state: AppState, user_id: str) -> None:
+    """I/O function: displays user profile"""
+    print("\n=== Profil Saya ===")
+    profile = get_user_profile(state, user_id)
+    if not profile:
+        print("Profil tidak ditemukan.")
+        return
+    
+    print(format_profile_display(user_id, profile))
+    print("")
+
+def update_profile_interactive(state: AppState, user_id: str) -> AppState:
+    """I/O function: handles interactive profile updates"""
+    print("\n=== Ubah Profil ===")
+    profile = get_user_profile(state, user_id)
+    if not profile:
+        print("Profil tidak ditemukan.")
+        return state
+    
+    # Collect optional updates
+    nama = input("Nama (kosongkan jika tidak diubah): ").strip()
+    alamat = input("Alamat (kosongkan jika tidak diubah): ").strip()
+    hp = input("No. HP (kosongkan jika tidak diubah): ").strip()
+    
+    updates = {"nama": nama, "alamat": alamat, "hp": hp}
+    new_state = update_user_profile(state, user_id, updates)
+    
+    print("Profil berhasil diperbarui.\n")
+    return new_state
+
+
+# ---------------------------- Pure CRUD Functions for Peminjaman ---------------------------- #
+
+def get_user_peminjaman(state: AppState, user_id: str) -> List[Dict[str, str]]:
+    """Pure function: gets user's peminjaman list"""
+    return state.peminjaman.get(user_id, [])
+
+def create_peminjaman_entry(kelas: str, tanggal: str, mulai: str, 
+                           selesai: str, keperluan: str) -> Dict[str, str]:
+    """Pure function: creates new peminjaman entry"""
+    return {
+        "kelas": kelas,
+        "tanggal": tanggal,
+        "mulai": mulai,
+        "selesai": selesai,
+        "keperluan": keperluan,
+        "status": "pengajuan"
+    }
+
+def add_peminjaman(state: AppState, user_id: str, entry: Dict[str, str]) -> AppState:
+    """Pure function: adds peminjaman entry and returns new state"""
+    current_list = get_user_peminjaman(state, user_id)
+    new_list = current_list + [entry]  # Immutable append
+    new_peminjaman = {**state.peminjaman, user_id: new_list}
+    
+    return AppState(
+        accounts=state.accounts,
+        profiles=state.profiles,
+        peminjaman=new_peminjaman
+    )
+
+def update_peminjaman_at_index(state: AppState, user_id: str, index: int, 
+                              updates: Dict[str, str]) -> AppState:
+    """Pure function: updates peminjaman entry at specific index"""
+    current_list = get_user_peminjaman(state, user_id)
+    if not (0 <= index < len(current_list)):
+        return state  # Invalid index, no change
+    
+    # Create new list with updated entry
+    old_entry = current_list[index]
+    new_entry = {**old_entry}
+    
+    # Apply updates (only non-empty values)
+    for key, value in updates.items():
+        if value.strip():
+            new_entry[key] = value.strip()
+    
+    new_list = current_list[:index] + [new_entry] + current_list[index + 1:]
+    new_peminjaman = {**state.peminjaman, user_id: new_list}
+    
+    return AppState(
+        accounts=state.accounts,
+        profiles=state.profiles,
+        peminjaman=new_peminjaman
+    )
+
+def remove_peminjaman_at_index(state: AppState, user_id: str, index: int) -> AppState:
+    """Pure function: removes peminjaman entry at specific index"""
+    current_list = get_user_peminjaman(state, user_id)
+    if not (0 <= index < len(current_list)):
+        return state  # Invalid index, no change
+    
+    # Create new list without the removed entry
+    new_list = current_list[:index] + current_list[index + 1:]
+    new_peminjaman = {**state.peminjaman, user_id: new_list}
+    
+    return AppState(
+        accounts=state.accounts,
+        profiles=state.profiles,
+        peminjaman=new_peminjaman
+    )
+
+def format_peminjaman_display(peminjaman_list: List[Dict[str, str]]) -> str:
+    """Pure function: formats peminjaman list for display"""
+    if not peminjaman_list:
+        return "(Belum ada peminjaman)"
+    
+    lines = []
+    for i, entry in enumerate(peminjaman_list, start=1):
+        status = entry.get('status', 'pengajuan').upper()
+        kelas = entry.get('kelas', '-')
+        tanggal = entry.get('tanggal', '-')
+        mulai = entry.get('mulai', '-')
+        selesai = entry.get('selesai', '-')
+        keperluan = entry.get('keperluan', '-')
+        
+        lines.append(f"{i}. [{status:10}] {kelas} | {tanggal} {mulai}-{selesai}")
+        lines.append(f"   Keperluan: {keperluan}")
+    
+    return "\n".join(lines)
+
+def is_valid_peminjaman_index(user_input: str, max_count: int) -> bool:
+    """Pure function: validates peminjaman selection input"""
+    if user_input.lower() == "b":
+        return True
+    try:
+        val = int(user_input)
+        return 1 <= val <= max_count
+    except ValueError:
+        return False
+
+# ---------------------------- I/O CRUD Functions ---------------------------- #
+
+def display_peminjaman_list(state: AppState, user_id: str) -> None:
+    """I/O function: displays user's peminjaman list"""
+    print("\n=== Daftar Peminjaman Saya ===")
+    peminjaman_list = get_user_peminjaman(state, user_id)
+    display_text = format_peminjaman_display(peminjaman_list)
+    print(display_text)
+    print("")
+
+def select_room_interactive() -> str:
+    """I/O function: interactive room selection"""
+    print("Pilih Kelas:")
+    for i, room in enumerate(ROOMS, start=1):
+        print(f"{i}. {room}")
+    choice = get_choice_input("Masukkan pilihan: ", len(ROOMS))
+    return ROOMS[choice - 1]
+
+def create_peminjaman_interactive(state: AppState, user_id: str) -> AppState:
+    """I/O function: handles interactive peminjaman creation"""
     print("\n=== Ajukan Peminjaman Kelas ===")
-    kls = pilih_kelas()
-    tgl = input_tanggal()
-    mulai, selesai = input_jam_range()
-    kep = input_non_kosong("Keperluan: ")
-    entry = {"kelas": kls, "tanggal": tgl, "mulai": mulai, "selesai": selesai, "keperluan": kep, "status": "pengajuan"}
-    peminjaman[user_id].append(entry)
+    
+    kelas = select_room_interactive()
+    tanggal = get_tanggal_input()
+    mulai, selesai = get_jam_range_input()
+    keperluan = get_non_empty_input("Keperluan: ")
+    
+    entry = create_peminjaman_entry(kelas, tanggal, mulai, selesai, keperluan)
+    new_state = add_peminjaman(state, user_id, entry)
+    
     print("Pengajuan peminjaman disimpan.\n")
+    return new_state
 
-
-def ubah_peminjaman(user_id: str):
-    print("\n=== Ubah Peminjaman ===")
-    data = peminjaman.get(user_id, [])
-    if not data:
-        print("(Belum ada peminjaman)\n")
-        return
-    tampilkan_peminjaman(user_id)
-    idx = minta_indeks(len(data))
-    if idx is None:
-        return
-
-    d = data[idx]
-    print("Tekan Enter untuk mempertahankan nilai lama.")
-    ganti_kelas = input("Ganti kelas? (y/n): ").strip().lower()
-    if ganti_kelas == "y":
-        d["kelas"] = pilih_kelas()
-
-    s_tgl = input("Tanggal baru (YYYY-MM-DD): ").strip()
-    if s_tgl:
-        if valid_tanggal(s_tgl):
-            d["tanggal"] = s_tgl
-        else:
-            print("Format tanggal salah. Dibiarkan lama.")
-
-    s_mulai = input("Jam Mulai baru (HH:MM): ").strip()
-    s_selesai = input("Jam Selesai baru (HH:MM): ").strip()
-    if s_mulai or s_selesai:
-        # jika salah satu diisi, keduanya harus valid dan berurutan
-        if s_mulai and s_selesai and valid_jam(s_mulai) and valid_jam(s_selesai) and jam_berurutan(s_mulai, s_selesai):
-            d["mulai"] = s_mulai
-            d["selesai"] = s_selesai
-        else:
-            print("Jam tidak valid/berurutan. Dibiarkan nilai lama.")
-
-    s_kep = input("Keperluan baru: ").strip()
-    if s_kep:
-        d["keperluan"] = s_kep
-
-    # (Opsional) admin-only: ubah status. Di sini kita izinkan user mengubah untuk simulasi.
-    print("Ubah status (opsional): 1) pengajuan  2) disetujui  3) ditolak  4) (lewati)")
+def get_peminjaman_index_input(max_count: int) -> Optional[int]:
+    """I/O function: gets valid peminjaman index selection"""
     while True:
-        st = input("Pilihan: ").strip()
-        if st == "":
-            break
-        if st in ("1", "2", "3"):
-            d["status"] = STATUS_OPSI[int(st) - 1]
-            break
-        if st == "4":
-            break
-        print("Masukan tidak valid.")
-
-    data[idx] = d
-    peminjaman[user_id] = data
-    print("Peminjaman diperbarui.\n")
-
-
-def batalkan_peminjaman(user_id: str):
-    print("\n=== Batalkan (Hapus) Peminjaman ===")
-    data = peminjaman.get(user_id, [])
-    if not data:
-        print("(Belum ada peminjaman)\n")
-        return
-    tampilkan_peminjaman(user_id)
-    idx = minta_indeks(len(data))
-    if idx is None:
-        return
-    hapus = data.pop(idx)
-    print(f"Peminjaman {hapus.get('kelas','-')} pada {hapus.get('tanggal','-')} dibatalkan.\n")
-
-
-def minta_indeks(n: int):
-    while True:
-        s = input("Pilih nomor data (atau 'b' untuk batal): ").strip().lower()
-        if s == "b":
+        user_input = input("Pilih nomor data (atau 'b' untuk batal): ").strip()
+        if user_input.lower() == "b":
             print("Dibatalkan.\n")
             return None
-        try:
-            val = int(s)
-            if 1 <= val <= n:
-                return val - 1
-            print(f"Masukkan angka 1..{n}.")
-        except ValueError:
-            print("Masukan tidak valid.")
+        if is_valid_peminjaman_index(user_input, max_count):
+            return int(user_input) - 1
+        print(f"Masukkan angka 1..{max_count} atau 'b' untuk batal.")
+
+def update_peminjaman_interactive(state: AppState, user_id: str) -> AppState:
+    """I/O function: handles interactive peminjaman updates"""
+    print("\n=== Ubah Peminjaman ===")
+    
+    peminjaman_list = get_user_peminjaman(state, user_id)
+    if not peminjaman_list:
+        print("(Belum ada peminjaman)\n")
+        return state
+    
+    display_peminjaman_list(state, user_id)
+    index = get_peminjaman_index_input(len(peminjaman_list))
+    if index is None:
+        return state
+    
+    print("Tekan Enter untuk mempertahankan nilai lama.")
+    
+    # Collect updates
+    updates = {}
+    
+    ganti_kelas = input("Ganti kelas? (y/n): ").strip().lower()
+    if ganti_kelas == "y":
+        updates["kelas"] = select_room_interactive()
+    
+    tanggal_baru = input("Tanggal baru (YYYY-MM-DD): ").strip()
+    if tanggal_baru and is_valid_tanggal(tanggal_baru):
+        updates["tanggal"] = tanggal_baru
+    elif tanggal_baru:
+        print("Format tanggal salah. Dibiarkan lama.")
+    
+    mulai_baru = input("Jam Mulai baru (HH:MM): ").strip()
+    selesai_baru = input("Jam Selesai baru (HH:MM): ").strip()
+    
+    if mulai_baru and selesai_baru:
+        if (is_valid_jam(mulai_baru) and is_valid_jam(selesai_baru) and 
+            is_jam_berurutan(mulai_baru, selesai_baru)):
+            updates["mulai"] = mulai_baru
+            updates["selesai"] = selesai_baru
+        else:
+            print("Jam tidak valid/berurutan. Dibiarkan nilai lama.")
+    
+    keperluan_baru = input("Keperluan baru: ").strip()
+    if keperluan_baru:
+        updates["keperluan"] = keperluan_baru
+    
+    # Status update (optional)
+    print("Ubah status (opsional): 1) pengajuan  2) disetujui  3) ditolak  4) (lewati)")
+    while True:
+        status_choice = input("Pilihan: ").strip()
+        if status_choice == "" or status_choice == "4":
+            break
+        if status_choice in ("1", "2", "3"):
+            updates["status"] = STATUS_OPSI[int(status_choice) - 1]
+            break
+        print("Masukan tidak valid.")
+    
+    new_state = update_peminjaman_at_index(state, user_id, index, updates)
+    print("Peminjaman diperbarui.\n")
+    return new_state
+
+def delete_peminjaman_interactive(state: AppState, user_id: str) -> AppState:
+    """I/O function: handles interactive peminjaman deletion"""
+    print("\n=== Batalkan (Hapus) Peminjaman ===")
+    
+    peminjaman_list = get_user_peminjaman(state, user_id)
+    if not peminjaman_list:
+        print("(Belum ada peminjaman)\n")
+        return state
+    
+    display_peminjaman_list(state, user_id)
+    index = get_peminjaman_index_input(len(peminjaman_list))
+    if index is None:
+        return state
+    
+    deleted_entry = peminjaman_list[index]
+    new_state = remove_peminjaman_at_index(state, user_id, index)
+    
+    kelas = deleted_entry.get('kelas', '-')
+    tanggal = deleted_entry.get('tanggal', '-')
+    print(f"Peminjaman {kelas} pada {tanggal} dibatalkan.\n")
+    
+    return new_state
 
 
-def menu_crud(user_id: str):
+# ---------------------------- Functional Menu Handling ---------------------------- #
+
+def handle_crud_menu_choice(state: AppState, user_id: str, choice: int) -> AppState:
+    """Pure function: handles CRUD menu choice and returns new state"""
+    if choice == 1:
+        return create_peminjaman_interactive(state, user_id)
+    elif choice == 2:
+        display_peminjaman_list(state, user_id)
+        return state
+    elif choice == 3:
+        return update_peminjaman_interactive(state, user_id)
+    elif choice == 4:
+        return delete_peminjaman_interactive(state, user_id)
+    else:  # choice == 5
+        return state
+
+def crud_menu_loop(state: AppState, user_id: str) -> AppState:
+    """Functional loop for CRUD operations"""
+    current_state = state
     while True:
         print("=== Menu Peminjaman Kelas ===")
         for i, item in enumerate(CRUD_MENU, start=1):
             print(f"{i}. {item}")
-        choice = input_pilihan("Pilih menu (1-5): ", list(CRUD_MENU))
-
-        if choice == 1:
-            ajukan_peminjaman(user_id)
-        elif choice == 2:
-            tampilkan_peminjaman(user_id)
-        elif choice == 3:
-            ubah_peminjaman(user_id)
-        elif choice == 4:
-            batalkan_peminjaman(user_id)
-        elif choice == 5:
+        
+        choice = get_choice_input("Pilih menu (1-5): ", len(CRUD_MENU))
+        
+        if choice == 5:  # Kembali
             print("Kembali ke menu pengguna.\n")
-            return
+            break
+        
+        current_state = handle_crud_menu_choice(current_state, user_id, choice)
+    
+    return current_state
 
+def handle_user_menu_choice(state: AppState, user_id: str, choice: int) -> AppState:
+    """Pure function: handles authenticated user menu choice"""
+    if choice == 1:
+        display_user_profile(state, user_id)
+        return state
+    elif choice == 2:
+        return update_profile_interactive(state, user_id)
+    elif choice == 3:
+        return crud_menu_loop(state, user_id)
+    else:  # choice == 4 (logout)
+        return state
 
-# ---------------------------- Loop Menu Setelah Login ---------------------------- #
-def menu_setelah_login(user_id: str):
+def authenticated_user_loop(state: AppState, user_id: str) -> AppState:
+    """Functional loop for authenticated user operations"""
+    current_state = state
     while True:
         print("=== Menu Pengguna ===")
         for i, item in enumerate(AUTH_MENU, start=1):
             print(f"{i}. {item}")
-        choice = input_pilihan("Pilih menu (1-4): ", list(AUTH_MENU))
-
-        if choice == 1:
-            lihat_profil(user_id)
-        elif choice == 2:
-            ubah_profil(user_id)
-        elif choice == 3:
-            menu_crud(user_id)
-        elif choice == 4:
+        
+        choice = get_choice_input("Pilih menu (1-4): ", len(AUTH_MENU))
+        
+        if choice == 4:  # Logout
             print("Logout berhasil.\n")
-            return
+            break
+        
+        current_state = handle_user_menu_choice(current_state, user_id, choice)
+    
+    return current_state
 
 
-# ---------------------------- Aplikasi Utama ---------------------------- #
-def print_selamat_datang():
+# ---------------------------- Functional Main Application ---------------------------- #
+
+def print_welcome_banner() -> None:
+    """Pure I/O function: displays welcome banner"""
     print("="*64)
     print("   SELAMAT DATANG DI SISTEM INFORMASI PEMINJAMAN KELAS (SIPK)")
+    print("   *** REFACTORED WITH FUNCTIONAL PROGRAMMING PARADIGM ***")
     print("="*64)
     print("Menu utama disimpan sebagai TUPLE. Contoh slicing MAIN_MENU[:3] =>")
     print("->", MAIN_MENU[:3])  # Demonstrasi slicing mengambil 3 item pertama
     print("-"*64)
     print("Daftar kelas (ROOMS) juga berupa TUPLE (immutable referensi ruang).")
+    print("Pure Functions: No side effects, immutable state management")
     print("")
 
-def main():
-    print_selamat_datang()
+def handle_main_menu_choice(state: AppState, choice: int) -> AppState:
+    """Pure function: handles main menu choice and returns new state"""
+    if choice == 1:
+        return register_user_interactive(state)
+    elif choice == 2:
+        user_id = login_user_interactive(state)
+        if user_id:
+            return authenticated_user_loop(state, user_id)
+        return state
+    else:  # choice == 3 (exit)
+        return state
+
+def main_application_loop() -> None:
+    """Functional main application loop with immutable state management"""
+    print_welcome_banner()
+    current_state = INITIAL_STATE
+    
     while True:
         print("=== Menu Utama ===")
         menu_awal = MAIN_MENU[:3]  # slicing sesuai ketentuan
         for i, item in enumerate(menu_awal, start=1):
             print(f"{i}. {item}")
-        choice = input_pilihan("Pilih menu (1-3): ", list(menu_awal))
-
-        if choice == 1:
-            register()
-        elif choice == 2:
-            user = login()
-            if user:
-                menu_setelah_login(user)
-        elif choice == 3:
+        
+        choice = get_choice_input("Pilih menu (1-3): ", len(menu_awal))
+        
+        if choice == 3:  # Keluar
             print("Terima kasih telah menggunakan SIPK. Sampai jumpa!")
             break
+        
+        # Functional state transformation
+        current_state = handle_main_menu_choice(current_state, choice)
 
+def main():
+    """Entry point with functional paradigm"""
+    main_application_loop()
 
 if __name__ == "__main__":
     main()
