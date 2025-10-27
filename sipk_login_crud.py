@@ -113,6 +113,7 @@ AUTH_MENU = (
     "Lihat Profil",
     "Ubah Profil",
     "Peminjaman Kelas (CRUD)",
+    "Statistik & Analytics",
     "Logout",
 )
 
@@ -121,6 +122,15 @@ CRUD_MENU = (
     "Lihat Daftar Peminjaman (Read)",
     "Ubah Peminjaman (Update)",
     "Batalkan Peminjaman (Delete)",
+    "Kembali",
+)
+
+ANALYTICS_MENU = (
+    "Statistik Saya",
+    "Laporan Utilisasi Kelas",
+    "Jadwal per Tanggal",
+    "Cari Berdasarkan Kelas",
+    "Analitik Lanjutan",
     "Kembali",
 )
 
@@ -451,6 +461,406 @@ def is_valid_peminjaman_index(user_input: str, max_count: int) -> bool:
     except ValueError:
         return False
 
+
+# ========================================================================================
+# FITUR BARU: DATA SEQUENCE PROCESSING (List Comprehension, Map, Filter, Reduce, Rekursif)
+# ========================================================================================
+
+"""
+PENJELASAN KONSEP YANG DIGUNAKAN:
+
+1. LIST COMPREHENSION:
+   - Digunakan untuk transformasi dan filtering data secara deklaratif
+   - Lebih readable dibanding loop imperatif
+   - Efficient untuk membuat list baru dari sequence existing
+   
+2. NESTED LIST:
+   - Struktur hierarkis untuk mengorganisir data peminjaman per kelas
+   - Memudahkan analisis data berdasarkan kategori
+   
+3. MAP:
+   - Transformasi data secara pure functional (tidak pakai lambda)
+   - Mengaplikasikan fungsi ke setiap elemen sequence
+   
+4. FILTER:
+   - Filtering data berdasarkan predicate function
+   - Pure functional filtering tanpa mutasi
+   
+5. REDUCE:
+   - Agregasi data untuk statistik (total durasi, count, dll)
+   - Functional accumulation pattern
+   
+6. REKURSIF:
+   - Pencarian dalam struktur hierarkis (nested data)
+   - Pattern matching yang elegant untuk tree-like structures
+"""
+
+# ---------------------------- Pure Helper Functions untuk Data Processing ---------------------------- #
+
+def parse_time_to_minutes(time_str: str) -> int:
+    """Pure function: converts HH:MM to total minutes"""
+    try:
+        hours, minutes = map(int, time_str.split(':'))
+        return hours * 60 + minutes
+    except (ValueError, AttributeError):
+        return 0
+
+def calculate_duration_minutes(mulai: str, selesai: str) -> int:
+    """Pure function: calculates duration in minutes between two times"""
+    start_min = parse_time_to_minutes(mulai)
+    end_min = parse_time_to_minutes(selesai)
+    return max(0, end_min - start_min)
+
+def is_peminjaman_active(entry: Dict[str, str]) -> bool:
+    """Pure function: checks if peminjaman is active (not rejected)"""
+    return entry.get('status', 'pengajuan') != 'ditolak'
+
+def is_peminjaman_approved(entry: Dict[str, str]) -> bool:
+    """Pure function: checks if peminjaman is approved"""
+    return entry.get('status', '') == 'disetujui'
+
+def get_peminjaman_kelas(entry: Dict[str, str]) -> str:
+    """Pure function: extracts kelas from peminjaman entry"""
+    return entry.get('kelas', '')
+
+def add_duration_to_entry(entry: Dict[str, str]) -> Dict[str, str]:
+    """Pure function: adds duration field to peminjaman entry"""
+    mulai = entry.get('mulai', '00:00')
+    selesai = entry.get('selesai', '00:00')
+    duration = calculate_duration_minutes(mulai, selesai)
+    return {**entry, 'durasi_menit': duration}
+
+
+# ---------------------------- List Comprehension Features ---------------------------- #
+
+def get_all_peminjaman_flat(state: AppState) -> List[Dict[str, str]]:
+    """
+    Pure function: Flattens all peminjaman using LIST COMPREHENSION
+    
+    Alasan pakai list comprehension:
+    - Deklaratif dan readable untuk flatten nested structure
+    - Lebih efficient daripada nested loops imperatif
+    - Pure functional (no side effects)
+    """
+    return [
+        {**entry, 'user_id': user_id}
+        for user_id, peminjaman_list in state.peminjaman.items()
+        for entry in peminjaman_list
+    ]
+
+def get_active_peminjaman_by_user(state: AppState, user_id: str) -> List[Dict[str, str]]:
+    """
+    Pure function: Gets active peminjaman using LIST COMPREHENSION
+    
+    Alasan pakai list comprehension:
+    - Filtering dan transformasi dalam satu expression
+    - Lebih readable daripada filter() + map() chain
+    """
+    peminjaman_list = get_user_peminjaman(state, user_id)
+    return [
+        add_duration_to_entry(entry)
+        for entry in peminjaman_list
+        if is_peminjaman_active(entry)
+    ]
+
+def get_peminjaman_by_status(state: AppState, status: str) -> List[Dict[str, str]]:
+    """
+    Pure function: Gets all peminjaman with specific status using LIST COMPREHENSION
+    
+    Alasan pakai list comprehension:
+    - Combine flatten + filter dalam satu comprehension
+    - Efficient untuk multiple conditions
+    """
+    all_peminjaman = get_all_peminjaman_flat(state)
+    return [
+        entry for entry in all_peminjaman
+        if entry.get('status', 'pengajuan') == status
+    ]
+
+
+# ---------------------------- Nested List Features ---------------------------- #
+
+def group_peminjaman_by_kelas(state: AppState) -> Dict[str, List[Dict[str, str]]]:
+    """
+    Pure function: Groups peminjaman by kelas creating NESTED LIST structure
+    
+    Alasan pakai nested list:
+    - Organisasi hierarkis data (kelas -> list of peminjaman)
+    - Memudahkan analisis per kelas
+    - Structure alami untuk reporting
+    
+    Returns:
+        Dict dengan structure: {kelas: [peminjaman1, peminjaman2, ...]}
+    """
+    all_peminjaman = get_all_peminjaman_flat(state)
+    grouped = {}
+    
+    for entry in all_peminjaman:
+        kelas = entry.get('kelas', 'Unknown')
+        if kelas not in grouped:
+            grouped[kelas] = []
+        grouped[kelas] = grouped[kelas] + [entry]  # Immutable append
+    
+    return grouped
+
+def create_nested_schedule(state: AppState) -> List[List[Dict[str, str]]]:
+    """
+    Pure function: Creates NESTED LIST of peminjaman grouped by date
+    
+    Alasan pakai nested list:
+    - Struktur 2D: outer list = dates, inner list = peminjaman per date
+    - Cocok untuk calendar/schedule view
+    - Memudahkan sorting dan grouping
+    
+    Returns:
+        Nested list: [[peminjaman_date1], [peminjaman_date2], ...]
+    """
+    all_peminjaman = get_all_peminjaman_flat(state)
+    
+    # Group by date
+    date_groups = {}
+    for entry in all_peminjaman:
+        tanggal = entry.get('tanggal', 'Unknown')
+        if tanggal not in date_groups:
+            date_groups[tanggal] = []
+        date_groups[tanggal] = date_groups[tanggal] + [entry]
+    
+    # Convert to nested list sorted by date
+    sorted_dates = sorted(date_groups.keys())
+    return [date_groups[date] for date in sorted_dates]
+
+
+# ---------------------------- Map Features ---------------------------- #
+
+def transform_to_summary_format(entry: Dict[str, str]) -> Dict[str, str]:
+    """Pure function: Transforms peminjaman to summary format"""
+    return {
+        'nama': entry.get('user_id', 'Unknown'),
+        'kelas': entry.get('kelas', '-'),
+        'tanggal': entry.get('tanggal', '-'),
+        'durasi': f"{calculate_duration_minutes(entry.get('mulai', ''), entry.get('selesai', ''))} menit",
+        'status': entry.get('status', 'pengajuan')
+    }
+
+def get_peminjaman_summaries(state: AppState) -> List[Dict[str, str]]:
+    """
+    Pure function: Transforms all peminjaman using MAP
+    
+    Alasan pakai map:
+    - Pure functional transformation
+    - Mengaplikasikan fungsi transformasi ke setiap element
+    - Lebih deklaratif daripada loop
+    """
+    all_peminjaman = get_all_peminjaman_flat(state)
+    return list(map(transform_to_summary_format, all_peminjaman))
+
+def add_duration_field(entry: Dict[str, str]) -> Dict[str, str]:
+    """Pure function: Adds calculated duration to entry"""
+    duration = calculate_duration_minutes(
+        entry.get('mulai', '00:00'),
+        entry.get('selesai', '00:00')
+    )
+    return {**entry, 'durasi_menit': duration}
+
+def enrich_peminjaman_data(peminjaman_list: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """
+    Pure function: Enriches peminjaman data using MAP
+    
+    Alasan pakai map:
+    - Transformasi uniform ke semua elements
+    - Pure function composition
+    - No mutation of original data
+    """
+    return list(map(add_duration_field, peminjaman_list))
+
+
+# ---------------------------- Filter Features ---------------------------- #
+
+def get_long_duration_peminjaman(state: AppState, min_minutes: int) -> List[Dict[str, str]]:
+    """
+    Pure function: Filters peminjaman by duration using FILTER
+    
+    Alasan pakai filter:
+    - Pure functional filtering dengan predicate
+    - Deklaratif - fokus pada "what" bukan "how"
+    - Composable dengan functions lain
+    """
+    all_peminjaman = get_all_peminjaman_flat(state)
+    enriched = enrich_peminjaman_data(all_peminjaman)
+    
+    def is_long_duration(entry: Dict[str, str]) -> bool:
+        """Predicate function for filter"""
+        return entry.get('durasi_menit', 0) >= min_minutes
+    
+    return list(filter(is_long_duration, enriched))
+
+def get_approved_peminjaman(state: AppState) -> List[Dict[str, str]]:
+    """
+    Pure function: Filters approved peminjaman using FILTER
+    
+    Alasan pakai filter:
+    - Deklaratif filtering berdasarkan status
+    - Pure predicate function (is_peminjaman_approved)
+    - Efficient untuk large datasets
+    """
+    all_peminjaman = get_all_peminjaman_flat(state)
+    return list(filter(is_peminjaman_approved, all_peminjaman))
+
+
+# ---------------------------- Reduce Features ---------------------------- #
+
+def sum_durations(acc: int, entry: Dict[str, str]) -> int:
+    """Pure function: Accumulator for reduce to sum durations"""
+    return acc + entry.get('durasi_menit', 0)
+
+def calculate_total_duration(state: AppState, user_id: str) -> int:
+    """
+    Pure function: Calculates total duration using REDUCE
+    
+    Alasan pakai reduce:
+    - Agregasi data dari sequence ke single value
+    - Pattern functional untuk accumulation
+    - Pure functional (no side effects)
+    
+    Returns:
+        Total duration in minutes
+    """
+    peminjaman_list = get_user_peminjaman(state, user_id)
+    enriched = enrich_peminjaman_data(peminjaman_list)
+    return reduce(sum_durations, enriched, 0)
+
+def count_by_status_reducer(acc: Dict[str, int], entry: Dict[str, str]) -> Dict[str, int]:
+    """Pure function: Accumulator for counting by status"""
+    status = entry.get('status', 'pengajuan')
+    current_count = acc.get(status, 0)
+    return {**acc, status: current_count + 1}
+
+def get_status_statistics(state: AppState) -> Dict[str, int]:
+    """
+    Pure function: Calculates status statistics using REDUCE
+    
+    Alasan pakai reduce:
+    - Agregasi complex (counting + grouping)
+    - Functional fold pattern
+    - Single pass through data
+    
+    Returns:
+        Dict: {status: count}
+    """
+    all_peminjaman = get_all_peminjaman_flat(state)
+    return reduce(count_by_status_reducer, all_peminjaman, {})
+
+def calculate_kelas_utilization(state: AppState) -> Dict[str, int]:
+    """
+    Pure function: Calculates total minutes per kelas using REDUCE
+    
+    Alasan pakai reduce:
+    - Complex aggregation (group by kelas + sum duration)
+    - Efficient single-pass computation
+    """
+    def accumulate_by_kelas(acc: Dict[str, int], entry: Dict[str, str]) -> Dict[str, int]:
+        """Accumulator function for kelas utilization"""
+        kelas = entry.get('kelas', 'Unknown')
+        duration = entry.get('durasi_menit', 0)
+        current = acc.get(kelas, 0)
+        return {**acc, kelas: current + duration}
+    
+    all_peminjaman = get_all_peminjaman_flat(state)
+    enriched = enrich_peminjaman_data(all_peminjaman)
+    approved_only = list(filter(is_peminjaman_approved, enriched))
+    
+    return reduce(accumulate_by_kelas, approved_only, {})
+
+
+# ---------------------------- Recursive Features ---------------------------- #
+
+def search_peminjaman_recursive(peminjaman_list: List[Dict[str, str]], 
+                                kelas: str, index: int = 0) -> List[Dict[str, str]]:
+    """
+    Pure function: Searches peminjaman recursively by kelas
+    
+    Alasan pakai rekursif:
+    - Elegant untuk sequential search
+    - Pure functional (no loop state mutation)
+    - Tail-recursion friendly untuk optimization
+    - Pattern matching style programming
+    
+    Args:
+        peminjaman_list: List to search
+        kelas: Kelas to search for
+        index: Current position (for recursion)
+    
+    Returns:
+        List of matching peminjaman entries
+    """
+    # Base case: reached end of list
+    if index >= len(peminjaman_list):
+        return []
+    
+    current = peminjaman_list[index]
+    rest = search_peminjaman_recursive(peminjaman_list, kelas, index + 1)
+    
+    # Recursive case: check current and combine with rest
+    if current.get('kelas', '') == kelas:
+        return [current] + rest
+    else:
+        return rest
+
+def count_nested_peminjaman_recursive(nested_data: List[List[Dict[str, str]]], 
+                                     index: int = 0) -> int:
+    """
+    Pure function: Counts total peminjaman in NESTED LIST using RECURSION
+    
+    Alasan pakai rekursif:
+    - Natural untuk nested/hierarchical structures
+    - Dekomposisi problem: count first + count rest
+    - Pure functional (no counters or mutations)
+    
+    Args:
+        nested_data: Nested list of peminjaman
+        index: Current outer index
+    
+    Returns:
+        Total count of all peminjaman
+    """
+    # Base case
+    if index >= len(nested_data):
+        return 0
+    
+    # Recursive case: count current sublist + count rest
+    current_count = len(nested_data[index])
+    rest_count = count_nested_peminjaman_recursive(nested_data, index + 1)
+    
+    return current_count + rest_count
+
+def find_max_duration_recursive(peminjaman_list: List[Dict[str, str]], 
+                               current_max: int = 0, index: int = 0) -> int:
+    """
+    Pure function: Finds maximum duration recursively
+    
+    Alasan pakai rekursif:
+    - Divide and conquer pattern
+    - Pure functional max finding
+    - No mutable variables
+    
+    Returns:
+        Maximum duration in minutes
+    """
+    # Base case
+    if index >= len(peminjaman_list):
+        return current_max
+    
+    # Get current duration
+    entry = peminjaman_list[index]
+    duration = calculate_duration_minutes(
+        entry.get('mulai', '00:00'),
+        entry.get('selesai', '00:00')
+    )
+    
+    # Recursive case: update max and continue
+    new_max = max(current_max, duration)
+    return find_max_duration_recursive(peminjaman_list, new_max, index + 1)
+
 # ---------------------------- I/O CRUD Functions ---------------------------- #
 
 def display_peminjaman_list(state: AppState, user_id: str) -> None:
@@ -578,7 +988,271 @@ def delete_peminjaman_interactive(state: AppState, user_id: str) -> AppState:
     return new_state
 
 
+# ---------------------------- I/O Functions for Analytics & Reporting ---------------------------- #
+
+def display_user_statistics(state: AppState, user_id: str) -> None:
+    """
+    I/O function: Displays user statistics using data processing functions
+    Demonstrates: List Comprehension, Map, Filter, Reduce
+    """
+    print("\n" + "="*60)
+    print("STATISTIK PEMINJAMAN SAYA")
+    print("="*60)
+    
+    # Get user data
+    all_peminjaman = get_user_peminjaman(state, user_id)
+    
+    if not all_peminjaman:
+        print("Belum ada data peminjaman.\n")
+        return
+    
+    # Using LIST COMPREHENSION - filter active
+    active_peminjaman = [p for p in all_peminjaman if is_peminjaman_active(p)]
+    approved_peminjaman = [p for p in all_peminjaman if is_peminjaman_approved(p)]
+    
+    # Using REDUCE - calculate total duration
+    total_duration = calculate_total_duration(state, user_id)
+    
+    # Using MAP - enrich data
+    enriched = enrich_peminjaman_data(all_peminjaman)
+    
+    # Using RECURSIVE - find max duration
+    max_duration = find_max_duration_recursive(all_peminjaman)
+    
+    # Display statistics
+    print(f"Total Peminjaman       : {len(all_peminjaman)}")
+    print(f"Peminjaman Aktif       : {len(active_peminjaman)}")
+    print(f"Peminjaman Disetujui   : {len(approved_peminjaman)}")
+    print(f"Total Durasi           : {total_duration} menit ({total_duration // 60} jam {total_duration % 60} menit)")
+    print(f"Durasi Terpanjang      : {max_duration} menit")
+    
+    # Using LIST COMPREHENSION - group by status
+    status_counts = {}
+    for status in ['pengajuan', 'disetujui', 'ditolak']:
+        count = len([p for p in all_peminjaman if p.get('status', 'pengajuan') == status])
+        status_counts[status] = count
+    
+    print(f"\nRincian Status:")
+    print(f"  - Pengajuan : {status_counts.get('pengajuan', 0)}")
+    print(f"  - Disetujui : {status_counts.get('disetujui', 0)}")
+    print(f"  - Ditolak   : {status_counts.get('ditolak', 0)}")
+    print("")
+
+def display_kelas_utilization_report(state: AppState) -> None:
+    """
+    I/O function: Displays kelas utilization report
+    Demonstrates: Reduce, Map, Filter, List Comprehension
+    """
+    print("\n" + "="*60)
+    print("LAPORAN UTILISASI KELAS")
+    print("="*60)
+    
+    # Using REDUCE - calculate utilization per kelas
+    utilization = calculate_kelas_utilization(state)
+    
+    if not utilization:
+        print("Belum ada data peminjaman yang disetujui.\n")
+        return
+    
+    # Using LIST COMPREHENSION - sort by duration
+    sorted_kelas = sorted(
+        [(kelas, duration) for kelas, duration in utilization.items()],
+        key=lambda x: x[1],
+        reverse=True
+    )
+    
+    print(f"{'Kelas':<15} {'Total Durasi':<20} {'Jam'}")
+    print("-" * 60)
+    
+    for kelas, duration in sorted_kelas:
+        hours = duration // 60
+        minutes = duration % 60
+        print(f"{kelas:<15} {duration:>6} menit        {hours:>3} jam {minutes:>2} menit")
+    
+    # Total across all kelas
+    total = sum(duration for _, duration in sorted_kelas)
+    total_hours = total // 60
+    total_minutes = total % 60
+    print("-" * 60)
+    print(f"{'TOTAL':<15} {total:>6} menit        {total_hours:>3} jam {total_minutes:>2} menit")
+    print("")
+
+def display_schedule_by_date(state: AppState) -> None:
+    """
+    I/O function: Displays schedule grouped by date
+    Demonstrates: Nested List, List Comprehension
+    """
+    print("\n" + "="*60)
+    print("JADWAL PEMINJAMAN PER TANGGAL")
+    print("="*60)
+    
+    # Using NESTED LIST - group by date
+    nested_schedule = create_nested_schedule(state)
+    
+    if not nested_schedule:
+        print("Belum ada jadwal peminjaman.\n")
+        return
+    
+    # Using RECURSIVE - count total
+    total_count = count_nested_peminjaman_recursive(nested_schedule)
+    print(f"Total peminjaman: {total_count}\n")
+    
+    # Display each date group
+    for date_group in nested_schedule:
+        if date_group:
+            tanggal = date_group[0].get('tanggal', 'Unknown')
+            print(f"\n📅 {tanggal} ({len(date_group)} peminjaman)")
+            print("-" * 60)
+            
+            # Using LIST COMPREHENSION - sort by time
+            sorted_group = sorted(
+                date_group,
+                key=lambda x: x.get('mulai', '00:00')
+            )
+            
+            for entry in sorted_group:
+                kelas = entry.get('kelas', '-')
+                mulai = entry.get('mulai', '-')
+                selesai = entry.get('selesai', '-')
+                user = entry.get('user_id', '-')
+                status = entry.get('status', 'pengajuan').upper()
+                
+                print(f"  {mulai}-{selesai} | {kelas:<12} | {user:<10} | [{status}]")
+    
+    print("")
+
+def display_search_by_kelas(state: AppState) -> None:
+    """
+    I/O function: Search peminjaman by kelas
+    Demonstrates: Recursive search, List Comprehension
+    """
+    print("\n=== Cari Peminjaman Berdasarkan Kelas ===")
+    print("Kelas tersedia:")
+    for i, room in enumerate(ROOMS, start=1):
+        print(f"{i}. {room}")
+    
+    choice = get_choice_input("Pilih kelas: ", len(ROOMS))
+    selected_kelas = ROOMS[choice - 1]
+    
+    # Get all peminjaman
+    all_peminjaman = get_all_peminjaman_flat(state)
+    
+    # Using RECURSIVE SEARCH
+    results = search_peminjaman_recursive(all_peminjaman, selected_kelas)
+    
+    print(f"\n🔍 Hasil pencarian untuk kelas: {selected_kelas}")
+    print("=" * 60)
+    
+    if not results:
+        print("Tidak ada peminjaman untuk kelas ini.\n")
+        return
+    
+    print(f"Ditemukan {len(results)} peminjaman:\n")
+    
+    for i, entry in enumerate(results, start=1):
+        tanggal = entry.get('tanggal', '-')
+        mulai = entry.get('mulai', '-')
+        selesai = entry.get('selesai', '-')
+        user = entry.get('user_id', '-')
+        status = entry.get('status', 'pengajuan')
+        
+        duration = calculate_duration_minutes(mulai, selesai)
+        
+        print(f"{i}. {tanggal} | {mulai}-{selesai} ({duration} menit)")
+        print(f"   User: {user} | Status: {status.upper()}")
+    
+    print("")
+
+def display_advanced_analytics(state: AppState) -> None:
+    """
+    I/O function: Advanced analytics dashboard
+    Demonstrates: Filter, Map, Reduce combined
+    """
+    print("\n" + "="*60)
+    print("ANALITIK LANJUTAN")
+    print("="*60)
+    
+    # Using FILTER - get long duration peminjaman
+    long_duration = get_long_duration_peminjaman(state, 120)  # >= 2 hours
+    
+    # Using REDUCE - get status statistics
+    status_stats = get_status_statistics(state)
+    
+    # Using MAP - get summaries
+    summaries = get_peminjaman_summaries(state)
+    
+    # Using LIST COMPREHENSION - calculate averages
+    all_peminjaman = get_all_peminjaman_flat(state)
+    enriched = enrich_peminjaman_data(all_peminjaman)
+    
+    if enriched:
+        # Average duration using list comprehension
+        total_duration = sum([p.get('durasi_menit', 0) for p in enriched])
+        avg_duration = total_duration // len(enriched) if enriched else 0
+    else:
+        avg_duration = 0
+    
+    print(f"\n📊 Statistik Global:")
+    print(f"  Total Peminjaman     : {len(all_peminjaman)}")
+    print(f"  Durasi Rata-rata     : {avg_duration} menit")
+    print(f"  Peminjaman >2 jam    : {len(long_duration)}")
+    
+    print(f"\n📈 Distribusi Status:")
+    for status, count in status_stats.items():
+        percentage = (count / len(all_peminjaman) * 100) if all_peminjaman else 0
+        print(f"  {status.capitalize():<12} : {count:>3} ({percentage:.1f}%)")
+    
+    # Using NESTED LIST - group by kelas
+    grouped = group_peminjaman_by_kelas(state)
+    print(f"\n🏫 Kelas Paling Populer:")
+    
+    # Sort by count using list comprehension
+    kelas_popularity = sorted(
+        [(kelas, len(entries)) for kelas, entries in grouped.items()],
+        key=lambda x: x[1],
+        reverse=True
+    )
+    
+    for kelas, count in kelas_popularity[:3]:  # Top 3
+        print(f"  {kelas:<15} : {count} peminjaman")
+    
+    print("")
+
+
 # ---------------------------- Functional Menu Handling ---------------------------- #
+
+def handle_analytics_menu_choice(state: AppState, user_id: str, choice: int) -> None:
+    """I/O function: handles analytics menu choice"""
+    if choice == 1:
+        display_user_statistics(state, user_id)
+    elif choice == 2:
+        display_kelas_utilization_report(state)
+    elif choice == 3:
+        display_schedule_by_date(state)
+    elif choice == 4:
+        display_search_by_kelas(state)
+    elif choice == 5:
+        display_advanced_analytics(state)
+    # choice == 6 handled by loop
+
+def analytics_menu_loop(state: AppState, user_id: str) -> AppState:
+    """Functional loop for analytics operations"""
+    while True:
+        print("\n" + "="*60)
+        print("MENU STATISTIK & ANALYTICS")
+        print("="*60)
+        for i, item in enumerate(ANALYTICS_MENU, start=1):
+            print(f"{i}. {item}")
+        
+        choice = get_choice_input("Pilih menu (1-6): ", len(ANALYTICS_MENU))
+        
+        if choice == 6:  # Kembali
+            print("Kembali ke menu pengguna.\n")
+            break
+        
+        handle_analytics_menu_choice(state, user_id, choice)
+    
+    return state
 
 def handle_crud_menu_choice(state: AppState, user_id: str, choice: int) -> AppState:
     """Pure function: handles CRUD menu choice and returns new state"""
@@ -621,7 +1295,9 @@ def handle_user_menu_choice(state: AppState, user_id: str, choice: int) -> AppSt
         return update_profile_interactive(state, user_id)
     elif choice == 3:
         return crud_menu_loop(state, user_id)
-    else:  # choice == 4 (logout)
+    elif choice == 4:
+        return analytics_menu_loop(state, user_id)
+    else:  # choice == 5 (logout)
         return state
 
 def authenticated_user_loop(state: AppState, user_id: str) -> AppState:
@@ -632,9 +1308,9 @@ def authenticated_user_loop(state: AppState, user_id: str) -> AppState:
         for i, item in enumerate(AUTH_MENU, start=1):
             print(f"{i}. {item}")
         
-        choice = get_choice_input("Pilih menu (1-4): ", len(AUTH_MENU))
+        choice = get_choice_input("Pilih menu (1-5): ", len(AUTH_MENU))
         
-        if choice == 4:  # Logout
+        if choice == 5:  # Logout
             print("Logout berhasil.\n")
             break
         
@@ -647,15 +1323,24 @@ def authenticated_user_loop(state: AppState, user_id: str) -> AppState:
 
 def print_welcome_banner() -> None:
     """Pure I/O function: displays welcome banner"""
-    print("="*64)
-    print("   SELAMAT DATANG DI SISTEM INFORMASI PEMINJAMAN KELAS (SIPK)")
-    print("   *** REFACTORED WITH FUNCTIONAL PROGRAMMING PARADIGM ***")
-    print("="*64)
+    print("="*70)
+    print(" SELAMAT DATANG DI SISTEM INFORMASI PEMINJAMAN KELAS (SIPK)")
+    print(" *** REFACTORED WITH FUNCTIONAL PROGRAMMING PARADIGM ***")
+    print("="*70)
     print("Menu utama disimpan sebagai TUPLE. Contoh slicing MAIN_MENU[:3] =>")
-    print("->", MAIN_MENU[:3])  # Demonstrasi slicing mengambil 3 item pertama
-    print("-"*64)
+    print("->", MAIN_MENU[:3])
+    print("-"*70)
     print("Daftar kelas (ROOMS) juga berupa TUPLE (immutable referensi ruang).")
     print("Pure Functions: No side effects, immutable state management")
+    print("")
+    print("🆕 FITUR BARU - DATA SEQUENCE PROCESSING:")
+    print("  ✅ List Comprehension - Filtering & transformasi deklaratif")
+    print("  ✅ Nested List - Struktur hierarkis untuk analytics")
+    print("  ✅ Map - Pure functional data transformation")
+    print("  ✅ Filter - Predicate-based filtering")
+    print("  ✅ Reduce - Agregasi & statistik")
+    print("  ✅ Recursive - Pencarian & processing hierarkis")
+    print("="*70)
     print("")
 
 def handle_main_menu_choice(state: AppState, choice: int) -> AppState:
@@ -699,19 +1384,27 @@ def validate_pure_functions():
     VALIDATION: Memastikan semua pure functions benar-benar pure (no side effects)
     
     ✅ PURE FUNCTIONS (Confirmed NO side effects):
+    
+    BASIC VALIDATION:
     - is_valid_tanggal(date_str) -> bool
     - is_valid_jam(time_str) -> bool  
     - is_jam_berurutan(mulai, selesai) -> bool
     - is_valid_password(password) -> bool
     - is_valid_choice(choice_str, max_options) -> bool
     - is_non_empty(text) -> bool
+    
+    AUTHENTICATION:
     - create_new_account(state, ...) -> AppState
     - is_user_exists(state, user_id) -> bool
     - authenticate_user(state, user_id, password) -> bool
     - get_user_profile_name(state, user_id) -> str
+    
+    PROFILE MANAGEMENT:
     - get_user_profile(state, user_id) -> Optional[Dict]
     - update_user_profile(state, user_id, updates) -> AppState
     - format_profile_display(user_id, profile) -> str
+    
+    CRUD OPERATIONS:
     - get_user_peminjaman(state, user_id) -> List[Dict]
     - create_peminjaman_entry(...) -> Dict
     - add_peminjaman(state, user_id, entry) -> AppState
@@ -719,6 +1412,68 @@ def validate_pure_functions():
     - remove_peminjaman_at_index(state, user_id, index) -> AppState
     - format_peminjaman_display(peminjaman_list) -> str
     - is_valid_peminjaman_index(user_input, max_count) -> bool
+    
+    🆕 DATA SEQUENCE PROCESSING (FITUR BARU):
+    
+    HELPER FUNCTIONS:
+    - parse_time_to_minutes(time_str) -> int
+    - calculate_duration_minutes(mulai, selesai) -> int
+    - is_peminjaman_active(entry) -> bool
+    - is_peminjaman_approved(entry) -> bool
+    - get_peminjaman_kelas(entry) -> str
+    - add_duration_to_entry(entry) -> Dict
+    
+    LIST COMPREHENSION:
+    - get_all_peminjaman_flat(state) -> List[Dict]
+      Alasan: Flatten nested dict structure secara deklaratif
+    - get_active_peminjaman_by_user(state, user_id) -> List[Dict]
+      Alasan: Filter + transform dalam satu expression
+    - get_peminjaman_by_status(state, status) -> List[Dict]
+      Alasan: Combine flatten + filter efficiently
+    
+    NESTED LIST:
+    - group_peminjaman_by_kelas(state) -> Dict[str, List[Dict]]
+      Alasan: Hierarchical organization untuk reporting
+    - create_nested_schedule(state) -> List[List[Dict]]
+      Alasan: 2D structure untuk calendar view
+    
+    MAP:
+    - transform_to_summary_format(entry) -> Dict
+      Alasan: Pure transformation function
+    - get_peminjaman_summaries(state) -> List[Dict]
+      Alasan: Apply transformation uniformly
+    - add_duration_field(entry) -> Dict
+      Alasan: Enrich data tanpa mutation
+    - enrich_peminjaman_data(peminjaman_list) -> List[Dict]
+      Alasan: Batch enrichment dengan map
+    
+    FILTER:
+    - get_long_duration_peminjaman(state, min_minutes) -> List[Dict]
+      Alasan: Declarative filtering dengan predicate
+    - get_approved_peminjaman(state) -> List[Dict]
+      Alasan: Pure functional filtering
+    
+    REDUCE:
+    - sum_durations(acc, entry) -> int
+      Alasan: Accumulator untuk reduce
+    - calculate_total_duration(state, user_id) -> int
+      Alasan: Aggregate sequence to single value
+    - count_by_status_reducer(acc, entry) -> Dict
+      Alasan: Complex aggregation pattern
+    - get_status_statistics(state) -> Dict[str, int]
+      Alasan: Group and count dengan reduce
+    - calculate_kelas_utilization(state) -> Dict[str, int]
+      Alasan: Multi-level aggregation
+    
+    RECURSIVE:
+    - search_peminjaman_recursive(peminjaman_list, kelas, index) -> List[Dict]
+      Alasan: Elegant sequential search tanpa loops
+    - count_nested_peminjaman_recursive(nested_data, index) -> int
+      Alasan: Natural untuk hierarchical counting
+    - find_max_duration_recursive(peminjaman_list, current_max, index) -> int
+      Alasan: Divide and conquer max finding
+    
+    MENU HANDLING:
     - handle_crud_menu_choice(state, user_id, choice) -> AppState
     - handle_user_menu_choice(state, user_id, choice) -> AppState
     - handle_main_menu_choice(state, choice) -> AppState
@@ -738,6 +1493,16 @@ def validate_pure_functions():
     - get_peminjaman_index_input(max_count) -> Optional[int] [Contains: input(), print()]
     - update_peminjaman_interactive(state, user_id) -> AppState [Contains: input(), print()]
     - delete_peminjaman_interactive(state, user_id) -> AppState [Contains: input(), print()]
+    
+    🆕 ANALYTICS I/O FUNCTIONS:
+    - display_user_statistics(state, user_id) -> None [Contains: print()]
+    - display_kelas_utilization_report(state) -> None [Contains: print()]
+    - display_schedule_by_date(state) -> None [Contains: print()]
+    - display_search_by_kelas(state) -> None [Contains: input(), print()]
+    - display_advanced_analytics(state) -> None [Contains: print()]
+    - handle_analytics_menu_choice(state, user_id, choice) -> None
+    - analytics_menu_loop(state, user_id) -> AppState [Contains: print()]
+    
     - crud_menu_loop(state, user_id) -> AppState [Contains: print()]
     - authenticated_user_loop(state, user_id) -> AppState [Contains: print()]
     - print_welcome_banner() -> None [Contains: print()]
@@ -748,6 +1513,16 @@ def validate_pure_functions():
     ✅ All I/O operations properly separated into I/O functions
     ✅ State management completely immutable through pure functions
     ✅ Functional programming paradigm correctly implemented
+    
+    🆕 DATA SEQUENCE PROCESSING FEATURES:
+    ✅ List Comprehension: 3 functions (flatten, filter, transform)
+    ✅ Nested List: 2 functions (grouping, hierarchical structure)
+    ✅ Map: 4 functions (transformation, enrichment)
+    ✅ Filter: 2 functions (predicate-based filtering)
+    ✅ Reduce: 5 functions (aggregation, statistics)
+    ✅ Recursive: 3 functions (search, count, max finding)
+    
+    🚀 TOTAL: 19 NEW PURE FUNCTIONS for data sequence processing
     """
     pass
 
